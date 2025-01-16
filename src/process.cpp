@@ -4,6 +4,15 @@
 #include <unistd.h>
 #include <libsdb/process.hpp>
 #include <libsdb/error.hpp>
+#include <libsdb/pipe.hpp>
+
+namespace {
+    void exit_with_perror(sdb::pipe& channel, std::string const& prefix) {
+        auto message = prefix + ": " + std::strerror(errno);
+        channel.write(reinterpret_cast<std::byte*>(message.data()), message.size());
+        exit(-1);
+    }
+}
 
 sdb::stop_reason::stop_reason(int wait_status) {
     if(WIFEXITED(wait_status)) {
@@ -20,19 +29,32 @@ sdb::stop_reason::stop_reason(int wait_status) {
 
 std::unique_ptr<sdb::process> sdb::process::launch(std::filesystem::path path) {
     
+    sdb::pipe channel(true);
+
     pid_t pid = fork();
     if(pid < 0) {
         error::send_errno("fork failed");
     }
 
     if(pid == 0) {
+        channel.close_read();
         if(ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) < 0) {
-            error::send_errno("Tracing failed");
+            exit_with_perror(channel, "Tracing failed");
         }
 
         if(execlp(path.c_str(), path.c_str(), nullptr) < 0) {
-            error::send_errno("exec failed");
+            exit_with_perror(channel, "exec failed");
         }
+    }
+
+    channel.close_write();
+    auto data = channel.read();
+    channel.close_read();
+
+    if(data.size() > 0) {
+        waitpid(pid, nullptr, 0);
+        auto chars = reinterpret_cast<char *>(data.data());
+        error::send(std::string(chars, chars + data.size()));
     }
 
     // want to terminate on end, as we create this new proc

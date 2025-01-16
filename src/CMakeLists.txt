@@ -1,5 +1,5 @@
 # specify target and source
-add_library(libsdb process.cpp)
+add_library(libsdb process.cpp pipe.cpp)
 add_library(sdb::libsdb ALIAS libsdb)
 
 # customize executable name (libsdb --> sdb)
